@@ -1,46 +1,69 @@
-name: Play_TicTacToe
+name: Tic-Tac-Toe Game Engine
+
+permissions:
+  contents: write
+  pull-requests: write
+
 on:
-  push:
-    branches: [ master ]
   pull_request:
-    branches: [ master ]
-  schedule:
-    - cron: '0 * * * *'
+    types: [opened, synchronize, reopened]
+    paths:
+      - "game_state.json"
+  push:
+    branches:
+      - master
+    paths:
+      - "game_state.json"
 
 jobs:
-  play:
+  validate-and-merge:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Checkout PR
+        uses: actions/checkout@v4
         with:
-          python-version: '3.x'
+          fetch-depth: 0
 
-      - name: Cache pip
-        uses: actions/cache@v3
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.base_ref }} --depth=2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-            ${{ runner.os }}-
+          python-version: "3.x"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Update game
-        run: python tictactoe.py
-        env:
-          API_KEY: ${{ secrets.API_KEY }}
-          WORKSPACE_ID: ${{ secrets.WORKSPACE_ID }}
-
-      - name: Commit and push
+      - name: Validate Player Move
         run: |
-          git diff
-          git add .
-          git config --global user.email "github-action-bot@example.com"
-          git config --global user.name "GitHub Action Bot"
-          git commit -m "Updated game" -a
-          git push
+          python tictactoe_pr.py --mode validate --base "origin/${{ github.base_ref }}" --player "${{ github.actor }}"
+
+      - name: Auto-merge valid PR
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge ${{ github.event.pull_request.html_url }} --squash --auto || true
+
+  process-turn:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Execute Game Turn & AI Countermove
+        run: |
+          python tictactoe_pr.py --mode play --base HEAD~1 --player "${{ github.actor }}"
+
+      - name: Commit updated board state & README
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(game): update Tic-Tac-Toe board and stats [skip ci]"
+          file_pattern: "game_state.json stats.json README.md"
